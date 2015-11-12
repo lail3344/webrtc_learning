@@ -1,1 +1,177 @@
 audio metrics in webrtc-internals
+
+indicators
+
+https://code.google.com/p/chromium/codesearch#chromium/src/third_party/libjingle/source/talk/app/webrtc/statscollector.cc&sq=package:chromium&type=cs
+
+
+for input
+  cname:05kk6L6iZKS+vqLT
+  msid:mmKFveibbcfwEKdsL8padeRgwc5PyXHdnFbZ 4154f1d8-45eb-4c4f-ab3a-73887a9c29aa
+  mslabel:mmKFveibbcfwEKdsL8padeRgwc5PyXHdnFbZ
+  label:4154f1d8-45eb-4c4f-ab3a-73887a9c29aa
+  audioInputLevel
+  bitsSentPerSecond
+  packetsLost
+  packetsSentPerSecond
+  googEchoCancellationQualityMin
+  googEchoCancellationEchoDelayMedian
+  googEchoCancellationEchoDelayStdDev
+  googEchoCancellationReturnLoss
+  googEchoCancellationReturnLossEnhancement
+  googJitterReceived
+  googRtt
+
+
+for output
+  cname:o/i14u9pJrxRKAsu
+  msid:wzTPIY6EDy a0
+  mslabel:wzTPIY6EDy
+  label:wzTPIY6EDya0
+  audioOutputLevel
+  bitsReceivedPerSecond
+  packetsLost
+  packetsReceivedPerSecond
+  googAccelerateRate
+  googCaptureStartNtpTimeMs
+  googCurrentDelayMs
+  googDecodingCNG
+  googDecodingCTN
+  googDecodingCTSG
+  googDecodingNormal
+  googDecodingPLC
+  googDecodingPLCCNG
+  googExpandRate
+  googJitterBufferMs
+  googJitterReceived
+  googPreemptiveExpandRate
+  googPreferredJitterBufferMs
+  googSecondaryDecodedRate
+  googSpeechExpandRate
+
+
+Code go through
+
+in common_types.h
+// Statistics for an RTCP channel
+struct RtcpStatistics {
+  RtcpStatistics()
+    : fraction_lost(0),
+      cumulative_lost(0),
+      extended_max_sequence_number(0),
+      jitter(0) {}
+
+  uint8_t fraction_lost;
+  uint32_t cumulative_lost;
+  uint32_t extended_max_sequence_number;
+  uint32_t jitter;
+};
+
+// Statistics for RTCP packet types.
+struct RtcpPacketTypeCounter {
+
+// Rate statistics for a stream.
+struct BitrateStatistics {
+
+struct NetworkStatistics           // NETEQ statistics
+
+// Statistics for calls to AudioCodingModule::PlayoutData10Ms().
+struct AudioDecodingCallStats {
+
+StatVal;
+
+LevelStatistics
+
+EchoStatistics
+
+struct RtpPacketCounter
+
+// Data usage statistics for a (rtp) stream.
+struct StreamDataCounters
+
+
+
+class RtcpStatisticsCallback {
+-->
+  RegisterRtcpStatisticsCallback(
+  called by in channel.cc
+  statistics_proxy_.reset(new StatisticsProxy(_rtpRtcpModule->SSRC()));
+    rtp_receive_statistics_->RegisterRtcpStatisticsCallback(
+        statistics_proxy_.get());
+
+class RtcpPacketTypeCounterObserver {
+
+// Callback, used to notify an observer whenever new rates have been estimated.
+class BitrateStatisticsObserver {
+
+// Callback, called whenever byte/packet counts have been updated.
+class StreamDataCountersCallback
+-->
+  RegisterSendChannelRtpStatisticsCallback
+
+For using from peerconnection layer
+statscollector.cd
+  StatsCollector::UpdateStats(PeerConnectionInterface::StatsOutputLevel level)
+    ExtractSessionInfo();
+    ExtractVoiceInfo();
+    ExtractVideoInfo(level);
+    ExtractDataInfo();
+    UpdateTrackReports();
+
+in channel.cc
+  // Extend the default RTCP statistics struct with max_jitter, defined as the
+  // maximum jitter value seen in an RTCP report block.
+  struct ChannelStatistics : public RtcpStatistics {
+
+  // Statistics callback, called at each generation of a new RTCP report block.
+  class StatisticsProxy : public RtcpStatisticsCallback {
+
+  class VoERtcpObserver : public RtcpBandwidthObserver {
+
+
+
+
+Some backtrace
+
+
+for RTP stats in ReceiveStatisticsImpl::IncomingPacket
+
+#0  webrtc::ReceiveStatisticsImpl::DataCountersUpdated (this=0x3bca7e0, stats=..., ssrc=1814100175)
+    at /home/luq/Dev2/webrtc-woogeen-2/third_party/webrtc/src/webrtc/modules/rtp_rtcp/source/receive_statistics_impl.cc:530
+#1  0x00007fb93426312d in webrtc::StreamStatisticianImpl::NotifyRtpCallback (this=0x3e4a000)
+    at /home/luq/Dev2/webrtc-woogeen-2/third_party/webrtc/src/webrtc/modules/rtp_rtcp/source/receive_statistics_impl.cc:181
+#2  0x00007fb934262bf7 in webrtc::StreamStatisticianImpl::IncomingPacket (this=0x3e4a000, header=..., packet_length=101, retransmitted=false)
+    at /home/luq/Dev2/webrtc-woogeen-2/third_party/webrtc/src/webrtc/modules/rtp_rtcp/source/receive_statistics_impl.cc:74
+#3  0x00007fb934263ee0 in webrtc::ReceiveStatisticsImpl::IncomingPacket (this=0x3bca7e0, header=..., packet_length=101, retransmitted=false)
+    at /home/luq/Dev2/webrtc-woogeen-2/third_party/webrtc/src/webrtc/modules/rtp_rtcp/source/receive_statistics_impl.cc:434
+#4  0x00007fb934241090 in woogeen_base::ProtectedRTPReceiver::deliverAudioData (this=0x87db700, buf=0x87e83e1 "\220x&hghe*l \370", <incomplete sequence \336>, len=101)
+    at /home/luq/Dev2/webrtc-woogeen-2/source/core/woogeen_base/ProtectedRTPReceiver.cpp:148
+#5  0x00007fb9341bc1bf in mcu::WebRTCGateway::deliverAudioData (this=0x3e43180, buf=0x87e83e1 "\220x&hghe*l \370", <incomplete sequence \336>, len=101)
+    at /home/luq/Dev2/webrtc-woogeen-2/source/core/mcu/WebRTCGateway.cpp:50
+#6  0x00007fb933c5bd21 in erizo::WebRtcConnection::onTransportData (this=0x3d1d200, buf=0x87e83e1 "\220x&hghe*l \370", <incomplete sequence \336>, len=101, transport=0x87e7008)
+    at /home/luq/Dev2/webrtc-woogeen-2/source/core/erizo/src/erizo/WebRtcConnection.cpp:427
+#7  0x00007fb933c3a917 in erizo::DtlsTransport::onNiceData (this=0x87e7000, component_id=1, data=0x3df0404 "\220o&hghe*l \370", <incomplete sequence \336>, len=111, nice=0x0)
+    at /home/luq/Dev2/webrtc-woogeen-2/source/core/erizo/src/erizo/DtlsTransport.cpp:165
+#8  0x00007fb933c3c84f in erizo::DtlsTransport::getNiceDataLoop (this=0x87e7000) at /home/luq/Dev2/webrtc-woogeen-2/source/core/erizo/src/erizo/DtlsTransport.cpp:315
+#9  0x00007fb933c420f9 in boost::_mfi::mf0<void, erizo::DtlsTransport>::operator() (this=0x3bcf478, p=0x87e7000) at /usr/include/boost/bind/mem_fn_template.hpp:49
+#10 0x00007fb933c4200a in boost::_bi::list1<boost::_bi::value<erizo::DtlsTransport*> >::operator()<boost::_mfi::mf0<void, erizo::DtlsTransport>, boost::_bi::list0> (this=0x3bcf488, f=..., a=...)
+    at /usr/include/boost/bind/bind.hpp:253
+
+
+for RTCP stats in StreamStatisticianImpl::GetStatistics 
+
+#0  webrtc::StreamStatisticianImpl::CalculateRtcpStatistics (this=0x3e4a2c0) at /home/luq/Dev2/webrtc-woogeen-2/third_party/webrtc/src/webrtc/modules/rtp_rtcp/source/receive_statistics_impl.cc:239
+#1  0x00007fb934263349 in webrtc::StreamStatisticianImpl::GetStatistics (this=0x3e4a2c0, statistics=0x7fb9297a7cb0, reset=true)
+    at /home/luq/Dev2/webrtc-woogeen-2/third_party/webrtc/src/webrtc/modules/rtp_rtcp/source/receive_statistics_impl.cc:230
+#2  0x00007fb934241eca in woogeen_base::ProtectedRTPReceiver::generateReceiverReport (this=0x87db200, buf=0x7fb9297af330 "\200", <incomplete sequence \311>, maxLength=1472)
+    at /home/luq/Dev2/webrtc-woogeen-2/source/core/woogeen_base/ProtectedRTPReceiver.cpp:298
+#3  0x00007fb9342416e1 in woogeen_base::ProtectedRTPReceiver::generateRTCPFeedback (this=0x87db200, buffer=0x7fb9297af330 "\200", <incomplete sequence \311>, bufferSize=1472, nack=false)
+    at /home/luq/Dev2/webrtc-woogeen-2/source/core/woogeen_base/ProtectedRTPReceiver.cpp:204
+#4  0x00007fb9341beb93 in mcu::WebRTCGateway::onTimeout (this=0x3e43180) at /home/luq/Dev2/webrtc-woogeen-2/source/core/mcu/WebRTCGateway.cpp:371
+#5  0x00007fb9341c3548 in woogeen_base::JobTimer::handleJob (this=0x3e48f40) at /home/luq/Dev2/webrtc-woogeen-2/source/core/woogeen_base/JobTimer.h:89
+#6  0x00007fb9341c34b1 in woogeen_base::JobTimer::onTimeout (this=0x3e48f40, ec=...) at /home/luq/Dev2/webrtc-woogeen-2/source/core/woogeen_base/JobTimer.h:80
+#7  0x00007fb9341cfe64 in boost::_mfi::mf1<void, woogeen_base::JobTimer, boost::system::error_code const&>::operator() (this=0x7fb9297afb30, p=0x3e48f40, a1=...)
+    at /usr/include/boost/bind/mem_fn_template.hpp:165
+
+
+
