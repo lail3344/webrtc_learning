@@ -1,0 +1,26 @@
+For pjsip,
+https://trac.pjsip.org/repos/ticket/1888
+
+How to use WebRTC AEC
+To use WebRTC AEC, specify the value PJMEDIA_ECHO_WEBRTC in pjsua_media_config.ec_options (MediaConfig.ecOptions for PJSUA2), and specify the delay estimate for sound card and system buffers in pjsua_media_config.ec_tail_len (MediaConfig.ecTailLen for PJSUA2). WebRTC AEC's performance is very dependent on this delay calculation. A poor estimate, even by as little as 40ms, may affect the echo cancellation results greatly. Our WebRTC wrapper has enabled the delay agnostic feature, which will adjust the delay accordingly, however it may take some time (5-10s or more) for the AEC module to learn the optimal delay, thus a good initial estimate is necessary for good EC quality in the beginning of a call.
+
+The delay should be at least as much as frame time (by default, ptime is 20ms) + PJMEDIA_WSOLA_DELAY_MSEC (the default is 5ms).
+
+In PJSUA sample application, run it with the options --ec-opt=3 and specify the delay estimate in --ec-tail options. For example:
+
+./pjsua --ec-opt=3 --ec-tail=30
+Poor WebRTC EC quality ¶
+Disable PJMEDIA_WEBRTC_AEC_USE_MOBILE (set it to 0), then change the definition of SHOW_DELAY_METRICS in pjmedia/src/pjmedia/echo_webrtc.c to a non-zero value. For example, if you set to 250, with ptime 20ms, it will print the delay metrics stats every 5 seconds or so.
+
+#define SHOW_DELAY_METRICS	250
+What you need to see in the log is the line:
+
+median=%d, std=%d, fraction of poor delays=%f
+Fraction of poor delays is a value between 0 and 1. The closer the value to 1, the poorer the EC quality.
+
+To improve the EC quality, here are a few things you can try:
+
+Adjust the EC tail value to the median value.
+Activate noise suppression (pass the options when creating EC with flag PJMEDIA_ECHO_USE_NOISE_SUPPRESSOR).
+Increase EC aggressiveness (pass the options when creating EC with flag PJMEDIA_ECHO_AGGRESSIVENESS_AGGRESSIVE).
+Disable the mobile version by setting PJMEDIA_WEBRTC_AEC_USE_MOBILE to 0 (by doing this, AEC will operate in floating-point mode (instead of integer), which may decrease performance).
