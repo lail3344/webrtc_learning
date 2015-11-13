@@ -88,7 +88,7 @@ struct RtpPacketCounter
 
 // Data usage statistics for a (rtp) stream.
 struct StreamDataCounters
-
+packetsLost
 
 
 class RtcpStatisticsCallback {
@@ -131,8 +131,8 @@ in channel.cc
 
 
 
+RTP/RTCP related status
 Some backtrace
-
 
 for RTP stats in ReceiveStatisticsImpl::IncomingPacket
 
@@ -173,5 +173,318 @@ for RTCP stats in StreamStatisticianImpl::GetStatistics
 #7  0x00007fb9341cfe64 in boost::_mfi::mf1<void, woogeen_base::JobTimer, boost::system::error_code const&>::operator() (this=0x7fb9297afb30, p=0x3e48f40, a1=...)
     at /usr/include/boost/bind/mem_fn_template.hpp:165
 
+
+For audioInputLevel in client(chrome), 
+only used by chrome, not see any report in native apprtcdemo
+TBD, need to track the volume after mixed which is send to sub in our MCU and compare the decoded audio level to the sender's audioInputLevel.
+     For MCU, 
+       outputlevel for each participants
+       outputlevel for mixed audio
+
+code path
+in webrtc_local_audio_track.h .cc
+
+// Used to calculate the signal level that shows in the UI.
+// Accessed on only the audio thread.
+scoped_ptr<MediaStreamAudioLevelCalculator> level_calculator_;
+
+it is updated by WebRtcLocalAudioTrack::Capture
+
+and it is used by statscollector.cc
+------
+void StatsCollector::UpdateReportFromAudioTrack(AudioTrackInterface* track,
+                                                StatsReport* report) {
+  RTC_DCHECK(pc_->session()->signaling_thread()->IsCurrent());
+  RTC_DCHECK(track != NULL);
+
+  int signal_level = 0;
+  if (!track->GetSignalLevel(&signal_level))
+    signal_level = -1;
+
+-->
+in media_stream_audio_level_calculator.cc
+float MediaStreamAudioLevelCalculator::Calculate(
+
+------
+since audio capture module in chrome is re-implemented not related to any audio_device module in webrtc stack.
+
+So, !!! NOTE !!!, audioInputLevel is calculated in chrome audio capture module not the audio_device module in legacy webrtc stack.
+
+
+For audioOutputLevel in client(chrome),
+  which should be compared with outoutlevel of Mixed audio sending from MCU
+  For MCU, TBD recording the outputlevel of mixed audio
+
+
+For packetsLost in client(chrome)
+check the calculation mechanism, based RTCP SR
+
+
+For googEchoCancellationQualityMin
+  googEchoCancellationEchoDelayMedian
+  googEchoCancellationEchoDelayStdDev
+  googEchoCancellationReturnLoss
+  googEchoCancellationReturnLossEnhancement
+,
+those input audio processing related indicators not involved by MCU, just skip them
+
+
+For 
+  googJitterReceived, googRtt in Sender
+
+
+code path
+in statscollector.cc, see
+void StatsCollector::ExtractVoiceInfo() {
+  if (!pc_->session()->voice_channel()->GetStats(&voice_info)) {
+
+-->
+webrtcvoiceengine.cc
+bool WebRtcVoiceMediaChannel::GetStats(VoiceMediaInfo* info) {audio_level
+-->
+audio_send_stream.cc
+webrtc::AudioSendStream::Stats AudioSendStream::GetStats()
+Note, this function is core method for generated audio related stats
+
+-------
+ RTC_DCHECK(thread_checker_.CalledOnValidThread());
+  webrtc::AudioSendStream::Stats stats;
+  stats.local_ssrc = config_.rtp.ssrc;
+  internal::AudioState* audio_state =
+      static_cast<internal::AudioState*>(audio_state_.get());
+  VoiceEngine* voice_engine = audio_state->voice_engine();
+  ScopedVoEInterface<VoEAudioProcessing> processing(voice_engine);
+  ScopedVoEInterface<VoECodec> codec(voice_engine);
+  ScopedVoEInterface<VoERTP_RTCP> rtp(voice_engine);
+  ScopedVoEInterface<VoEVolumeControl> volume(voice_engine);
+  unsigned int ssrc = 0;
+  webrtc::CallStatistics call_stats = {0};
+  if (rtp->GetLocalSSRC(config_.voe_channel_id, ssrc) == -1 ||
+      rtp->GetRTCPStatistics(config_.voe_channel_id, call_stats) == -1) {
+    return stats;
+  }
+
+  stats.bytes_sent = call_stats.bytesSent;
+  stats.packets_sent = call_stats.packetsSent;
+
+  webrtc::CodecInst codec_inst = {0};
+  if (codec->GetSendCodec(config_.voe_channel_id, codec_inst) != -1) {
+    RTC_DCHECK_NE(codec_inst.pltype, -1);
+    stats.codec_name = codec_inst.plname;
+
+    // Get data from the last remote RTCP report.
+    std::vector<webrtc::ReportBlock> blocks;
+    if (rtp->GetRemoteRTCPReportBlocks(config_.voe_channel_id, &blocks) != -1) {
+      for (const webrtc::ReportBlock& block : blocks) {
+        // Lookup report for send ssrc only.
+        if (block.source_SSRC == stats.local_ssrc) {
+          stats.packets_lost = block.cumulative_num_packets_lost;
+          stats.fraction_lost = Q8ToFloat(block.fraction_lost);
+          stats.ext_seqnum = block.extended_highest_sequence_number;
+          // Convert samples to milliseconds.
+          if (codec_inst.plfreq / 1000 > 0) {
+            stats.jitter_ms =
+                block.interarrival_jitter / (codec_inst.plfreq / 1000);
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  // RTT isn't known until a RTCP report is received. Until then, VoiceEngine
+  // returns 0 to indicate an error value.
+  if (call_stats.rttMs > 0) {
+    stats.rtt_ms = call_stats.rttMs;
+  }
+
+  // Local speech level. --> for audioOutputLevel
+  {
+    unsigned int level = 0;
+    if (volume->GetSpeechInputLevelFullRange(level) != -1) {
+      stats.audio_level = static_cast<int32_t>(level);
+    }
+  }
+
+  // TODO(ajm): Re-enable this metric once we have a reliable implementation.
+  stats.aec_quality_min = -1;
+
+  bool echo_metrics_on = false;
+  if (processing->GetEcMetricsStatus(echo_metrics_on) != -1 &&
+      echo_metrics_on) {
+    // These can also be negative, but in practice -1 is only used to signal
+    // insufficient data, since the resolution is limited to multiples of 4 ms.
+    int median = -1;
+    int std = -1;
+    float dummy = 0.0f;
+    if (processing->GetEcDelayMetrics(median, std, dummy) != -1) {
+      stats.echo_delay_median_ms = median;
+      stats.echo_delay_std_ms = std;
+    }
+
+    // These can take on valid negative values, so use the lowest possible level
+    // as default rather than -1.
+    int erl = -100;
+    int erle = -100;
+    int dummy1 = 0;
+    int dummy2 = 0;
+    if (processing->GetEchoMetrics(erl, erle, dummy1, dummy2) != -1) {
+      stats.echo_return_loss = erl;
+      stats.echo_return_loss_enhancement = erle;
+    }
+  }
+
+  stats.typing_noise_detected = audio_state->typing_noise_detected();
+
+  return stats;
+}googAccelerateRate
+------
+
+
+
+For in Receiver, TBD, check wheter there are other important information not exposed to webrtc-internals??
+   see RTP,RTCP callback
+   audioOutputLevel, bitsReceivedPerSecond, packetsLost, packetsReceivedPerSecond
+
+see comments in below source code
+  googAccelerateRate
+  googCaptureStartNtpTimeMs
+  googCurrentDelayMs
+  googDecodingCNG
+  googDecodingCTN
+  googDecodingCTSG
+  googDecodingNormal
+  googDecodingPLC
+  googDecodingPLCCNG
+  googExpandRate
+  googJitterBufferMs
+  googJitterReceived
+  googPreemptiveExpandRate
+  googPreferredJitterBufferMs
+  googSecondaryDecodedRate
+  googSpeechExpandRate
+
+-----
+Mapping rule
+
+ ExtractCommonReceiveProperties(info, report);
+  const FloatForAdd floats[] = {
+    { StatsReport::kStatsValueNameExpandRate, info.expand_rate },
+    { StatsReport::kStatsValueNameSecondaryDecodedRate,
+      info.secondary_decoded_rate },
+    { StatsReport::kStatsValueNameSpeechExpandRate, info.speech_expand_rate },
+    { StatsReport::kStatsValueNameAccelerateRate, info.accelerate_rate },
+    { StatsReport::kStatsValueNamePreemptiveExpandRate,
+      info.preemptive_expand_rate },
+  };
+
+  const IntForAdd ints[] = {
+    { StatsReport::kStatsValueNameAudioOutputLevel, info.audio_level },
+    { StatsReport::kStatsValueNameCurrentDelayMs, info.delay_estimate_ms },
+    { StatsReport::kStatsValueNameDecodingCNG, info.decoding_cng },
+    { StatsReport::kStatsValueNameDecodingCTN, info.decoding_calls_to_neteq },
+    { StatsReport::kStatsValueNameDecodingCTSG,
+      info.decoding_calls_to_silence_generator },
+    { StatsReport::kStatsValueNameDecodingNormal, info.decoding_normal },
+    { StatsReport::kStatsValueNameDecodingPLC, info.decoding_plc },
+    { StatsReport::kStatsValueNameDecodingPLCCNG, info.decoding_plc_cng },
+    { StatsReport::kStatsValueNameJitterBufferMs, info.jitter_buffer_ms },
+    { StatsReport::kStatsValueNameJitterReceived, info.jitter_ms },
+    { StatsReport::kStatsValueNamePacketsLost, info.packets_lost },
+    { StatsReport::kStatsValueNamePacketsReceived, info.packets_rcvd },
+    { StatsReport::kStatsValueNamePreferredJitterBufferMs,
+      info.jitter_buffer_preferred_ms },
+  };
+
+-----
+
+Code path:
+
+in statscollector.cc, see
+void StatsCollector::ExtractVoiceInfo() {
+  if (!pc_->session()->voice_channel()->GetStats(&voice_info)) {
+
+-->
+webrtcvoiceengine.cc
+bool WebRtcVoiceMediaChannel::GetStats(VoiceMediaInfo* info) {audio_level
+-->
+audio_receive_stream.cc
+-----
+webrtc::AudioReceiveStream::Stats AudioReceiveStream::GetStats() const {
+  RTC_DCHECK(thread_checker_.CalledOnValidThread());
+  webrtc::AudioReceiveStream::Stats stats;
+  stats.remote_ssrc = config_.rtp.remote_ssrc;
+  internal::AudioState* audio_state =
+      static_cast<internal::AudioState*>(audio_state_.get());
+  VoiceEngine* voice_engine = audio_state->voice_engine();
+  ScopedVoEInterface<VoECodec> codec(voice_engine);
+  ScopedVoEInterface<VoENetEqStats> neteq(voice_engine);
+  ScopedVoEInterface<VoERTP_RTCP> rtp(voice_engine);
+  ScopedVoEInterface<VoEVideoSync> sync(voice_engine);
+  ScopedVoEInterface<VoEVolumeControl> volume(voice_engine);
+  unsigned int ssrc = 0;
+  webrtc::CallStatistics call_stats = {0};
+  webrtc::CodecInst codec_inst = {0};
+  // Only collect stats if we have seen some traffic with the SSRC.
+  if (rtp->GetRemoteSSRC(config_.voe_channel_id, ssrc) == -1 ||
+      rtp->GetRTCPStatistics(config_.voe_channel_id, call_stats) == -1 ||
+      codec->GetRecCodec(config_.voe_channel_id, codec_inst) == -1) {
+    return stats;
+  }
+
+  stats.bytes_rcvd = call_stats.bytesReceived;
+  stats.packets_rcvd = call_stats.packetsReceived;
+  stats.packets_lost = call_stats.cumulativeLost;
+  stats.fraction_lost = Q8ToFloat(call_stats.fractionLost); --> not exposed to webrtc_internal
+  if (codec_inst.pltype != -1) {
+    stats.codec_name = codec_inst.plname;
+  }
+  stats.ext_seqnum = call_stats.extendedMax; --> note exposed to webrtc_internal
+  if (codec_inst.plfreq / 1000 > 0) {
+    stats.jitter_ms = call_stats.jitterSamples / (codec_inst.plfreq / 1000); --> googJitterReceived
+  }
+  {
+    int jitter_buffer_delay_ms = 0;
+    int playout_buffer_delay_ms = 0;
+    sync->GetDelayEstimate(config_.voe_channel_id, &jitter_buffer_delay_ms,
+                           &playout_buffer_delay_ms);
+    stats.delay_estimate_ms = jitter_buffer_delay_ms + playout_buffer_delay_ms; --> googCurrentDelayMs
+  }
+  {
+    unsigned int level = 0;
+    if (volume->GetSpeechOutputLevelFullRange(config_.voe_channel_id, level) !=
+        -1) {
+      stats.audio_level = static_cast<int32_t>(level); --> audioOutputLevel
+    }
+  }
+
+  webrtc::NetworkStatistics ns = {0};
+  if (neteq->GetNetworkStatistics(config_.voe_channel_id, ns) != -1) {
+    // Get jitter buffer and total delay (alg + jitter + playout) stats.
+    stats.jitter_buffer_ms = ns.currentBufferSize; --> googJitterBufferMs
+    stats.jitter_buffer_preferred_ms = ns.preferredBufferSize; --> googPreferredJitterBufferMs
+    stats.expand_rate = Q14ToFloat(ns.currentExpandRate); --> googExpandRate
+    stats.speech_expand_rate = Q14ToFloat(ns.currentSpeechExpandRate); --> googSpeechExpandRate
+    stats.secondary_decoded_rate = Q14ToFloat(ns.currentSecondaryDecodedRate); --> googSecondaryDecodedRate
+    stats.accelerate_rate = Q14ToFloat(ns.currentAccelerateRate); --> googAccelerateRate
+    stats.preemptive_expand_rate = Q14ToFloat(ns.currentPreemptiveRate); --> googPreemptiveExpandRate
+  }
+
+  webrtc::AudioDecodingCallStats ds;
+  if (neteq->GetDecodingCallStatistics(config_.voe_channel_id, &ds) != -1) {
+    stats.decoding_calls_to_silence_generator = ds.calls_to_silence_generator;  --> googDecodingCTSG
+    stats.decoding_calls_to_neteq = ds.calls_to_neteq; --> googDecodingCTN
+    stats.decoding_normal = ds.decoded_normal; --> googDecodingNormal
+    stats.decoding_plc = ds.decoded_plc;  --> googDecodingPLC
+    stats.decoding_cng = ds.decoded_cng;  --> googDecodingCNG
+    stats.decoding_plc_cng = ds.decoded_plc_cng; --> googDecodingPLCCNG
+  }
+
+  stats.capture_start_ntp_time_ms = call_stats.capture_start_ntp_time_ms_;  --> googCaptureStartNtpTimeMs
+
+  return stats;
+}
+
+-----
 
 
