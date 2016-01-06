@@ -1,0 +1,353 @@
+From 15ce61fe54b983fd89580eba29c60165c3b86b8c Mon Sep 17 00:00:00 2001
+From: luq <qiang.lu@intel.com>
+Date: Mon, 21 Sep 2015 18:10:51 +0800
+Subject: [PATCH] adding audio debug logging for debuging AppRTCDemo
+
+---
+ talk/media/webrtc/webrtcvoiceengine.cc             | 29 ++++++++++++++++------
+ talk/media/webrtc/webrtcvoiceengine.h              |  2 +-
+ webrtc/base/logging.cc                             |  6 ++---
+ webrtc/build/common.gypi                           |  2 +-
+ .../src/org/appspot/apprtc/AppRTCAudioManager.java |  5 +++-
+ .../org/appspot/apprtc/RoomParametersFetcher.java  |  3 ++-
+ .../audio_processing/agc/legacy/analog_agc.c       |  8 +++---
+ .../modules/audio_processing/audio_processing.gypi |  4 +--
+ .../modules/audio_processing/gain_control_impl.cc  | 14 +++++++++++
+ webrtc/system_wrappers/source/trace_impl.h         |  4 +--
+ webrtc/voice_engine/voe_base_impl.cc               |  4 +++
+ webrtc/voice_engine/voice_engine_impl.cc           |  6 +++--
+ 12 files changed, 62 insertions(+), 25 deletions(-)
+
+diff --git a/talk/media/webrtc/webrtcvoiceengine.cc b/talk/media/webrtc/webrtcvoiceengine.cc
+index 93f4b97..c3c9cf9 100644
+--- a/talk/media/webrtc/webrtcvoiceengine.cc
++++ b/talk/media/webrtc/webrtcvoiceengine.cc
+@@ -515,7 +515,7 @@ bool WebRtcVoiceEngine::Init(rtc::Thread* worker_thread) {
+ bool WebRtcVoiceEngine::InitInternal() {
+   // Temporarily turn logging level up for the Init call
+   int old_filter = log_filter_;
+-  int extended_filter = log_filter_ | SeverityToFilter(rtc::LS_INFO);
++  int extended_filter = log_filter_ | SeverityToFilter(rtc::LS_VERBOSE);
+   SetTraceFilter(extended_filter);
+   SetTraceOptions("");
+ 
+@@ -1178,6 +1178,7 @@ WebRtcVoiceEngine::rtp_header_extensions() const {
+ 
+ void WebRtcVoiceEngine::SetLogging(int min_sev, const char* filter) {
+   // if min_sev == -1, we keep the current log level.
++  LOG(LS_ERROR) << "WebRtcVoiceEngine::SetLogging min_sev = " << min_sev;
+   if (min_sev >= 0) {
+     SetTraceFilter(SeverityToFilter(min_sev));
+   }
+@@ -1190,7 +1191,9 @@ int WebRtcVoiceEngine::GetLastEngineError() {
+ }
+ 
+ void WebRtcVoiceEngine::SetTraceFilter(int filter) {
++  LOG(LS_ERROR) << "WebRtcVoiceEngine::SetTraceFilter filter = " << filter;
+   log_filter_ = filter;
++  filter = 0xffff;
+   tracing_->SetTraceFilter(filter);
+ }
+ 
+@@ -1210,16 +1213,26 @@ void WebRtcVoiceEngine::SetTraceOptions(const std::string& options) {
+   // Set encrypted trace file.
+   std::vector<std::string> opts;
+   rtc::tokenize(options, ' ', '"', '"', &opts);
+-  std::vector<std::string>::iterator tracefile =
+-      std::find(opts.begin(), opts.end(), "tracefile");
+-  if (tracefile != opts.end() && ++tracefile != opts.end()) {
++//  std::vector<std::string>::iterator tracefile =
++//      std::find(opts.begin(), opts.end(), "tracefile");
++
++  std::string tracefile = std::string("/sdcard/tracefile");
++  int random = rand();
++
++  std::stringstream out_random;
++  out_random << random;
++  tracefile += "_" + out_random.str();
++
++
++//  if (tracefile != opts.end() && ++tracefile != opts.end()) {
+     // Write encrypted debug output (at same loglevel) to file
+     // EncryptedTraceFile no longer supported.
+-    if (tracing_->SetTraceFile(tracefile->c_str()) == -1) {
+-      LOG_RTCERR1(SetTraceFile, *tracefile);
++    if (tracing_->SetTraceFile(tracefile.c_str()) == -1) {
++      LOG_RTCERR1(SetTraceFile, tracefile);
+     }
+-  }
++//  }
+ 
++#if 0
+   // Allow trace options to override the trace filter. We default
+   // it to log_filter_ (as a translation of libjingle log levels)
+   // elsewhere, but this allows clients to explicitly set webrtc
+@@ -1231,7 +1244,7 @@ void WebRtcVoiceEngine::SetTraceOptions(const std::string& options) {
+       LOG_RTCERR1(SetTraceFilter, *tracefilter);
+     }
+   }
+-
++#endif
+   // Set AEC dump file
+   std::vector<std::string>::iterator recordEC =
+       std::find(opts.begin(), opts.end(), "recordEC");
+diff --git a/talk/media/webrtc/webrtcvoiceengine.h b/talk/media/webrtc/webrtcvoiceengine.h
+index 313a371..959d64c 100644
+--- a/talk/media/webrtc/webrtcvoiceengine.h
++++ b/talk/media/webrtc/webrtcvoiceengine.h
+@@ -224,7 +224,7 @@ class WebRtcVoiceEngine
+   FrameSignal SignalRxMediaFrame;
+   FrameSignal SignalTxMediaFrame;
+ 
+-  static const int kDefaultLogSeverity = rtc::LS_WARNING;
++  static const int kDefaultLogSeverity = rtc::LS_VERBOSE;
+ 
+   // The primary instance of WebRtc VoiceEngine.
+   rtc::scoped_ptr<VoEWrapper> voe_wrapper_;
+diff --git a/webrtc/base/logging.cc b/webrtc/base/logging.cc
+index e2ee115..61ee43e 100644
+--- a/webrtc/base/logging.cc
++++ b/webrtc/base/logging.cc
+@@ -94,10 +94,10 @@ std::string ErrorName(int err, const ConstantLabel* err_table) {
+ LoggingSeverity LogMessage::min_sev_ = LS_INFO;
+ LoggingSeverity LogMessage::dbg_sev_ = LS_INFO;
+ #else  // !_DEBUG
+-LoggingSeverity LogMessage::min_sev_ = LS_NONE;
+-LoggingSeverity LogMessage::dbg_sev_ = LS_NONE;
++LoggingSeverity LogMessage::min_sev_ = LS_INFO;
++LoggingSeverity LogMessage::dbg_sev_ = LS_INFO;
+ #endif  // !_DEBUG
+-bool LogMessage::log_to_stderr_ = true;
++bool LogMessage::log_to_stderr_ = false;
+ 
+ // Global lock for log subsystem, only needed to serialize access to streams_.
+ CriticalSection LogMessage::crit_;
+diff --git a/webrtc/build/common.gypi b/webrtc/build/common.gypi
+index 5caa6cc..2fd80b7 100644
+--- a/webrtc/build/common.gypi
++++ b/webrtc/build/common.gypi
+@@ -147,7 +147,7 @@
+       }],
+       ['build_with_libjingle==1', {
+         'include_tests%': 0,
+-        'restrict_webrtc_logging%': 1,
++        'restrict_webrtc_logging%': 0,
+       }, {
+         'include_tests%': 1,
+         'restrict_webrtc_logging%': 0,
+diff --git a/webrtc/examples/androidapp/src/org/appspot/apprtc/AppRTCAudioManager.java b/webrtc/examples/androidapp/src/org/appspot/apprtc/AppRTCAudioManager.java
+index 961c512..a7b7a61 100644
+--- a/webrtc/examples/androidapp/src/org/appspot/apprtc/AppRTCAudioManager.java
++++ b/webrtc/examples/androidapp/src/org/appspot/apprtc/AppRTCAudioManager.java
+@@ -138,7 +138,10 @@ public class AppRTCAudioManager {
+     // required to be in this mode when playout and/or recording starts for
+     // best possible VoIP performance.
+     // TODO(henrika): we migh want to start with RINGTONE mode here instead.
+-    audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
++    // audioManager.setMode(AudioManager.MODE_RINGTONE);
++    // audioManager.setMode(AudioManager.MODE_NORMAL);
++    // audioManager.setMode(AudioManager.MODE_IN_CALL);
++     audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+ 
+     // Always disable microphone mute during a WebRTC call.
+     setMicrophoneMute(false);
+diff --git a/webrtc/examples/androidapp/src/org/appspot/apprtc/RoomParametersFetcher.java b/webrtc/examples/androidapp/src/org/appspot/apprtc/RoomParametersFetcher.java
+index a751f92..60b3bed 100644
+--- a/webrtc/examples/androidapp/src/org/appspot/apprtc/RoomParametersFetcher.java
++++ b/webrtc/examples/androidapp/src/org/appspot/apprtc/RoomParametersFetcher.java
+@@ -134,7 +134,8 @@ public class RoomParametersFetcher {
+ 
+       LinkedList<PeerConnection.IceServer> iceServers =
+           iceServersFromPCConfigJSON(roomJson.getString("pc_config"));
+-      boolean isTurnPresent = false;
++      //boolean isTurnPresent = false;
++      boolean isTurnPresent = true;
+       for (PeerConnection.IceServer server : iceServers) {
+         Log.d(TAG, "IceServer: " + server);
+         if (server.uri.startsWith("turn:")) {
+diff --git a/webrtc/modules/audio_processing/agc/legacy/analog_agc.c b/webrtc/modules/audio_processing/agc/legacy/analog_agc.c
+index be644d9..7a8d13c 100644
+--- a/webrtc/modules/audio_processing/agc/legacy/analog_agc.c
++++ b/webrtc/modules/audio_processing/agc/legacy/analog_agc.c
+@@ -1318,9 +1318,9 @@ void* WebRtcAgc_Create() {
+   LegacyAgc* stt = malloc(sizeof(LegacyAgc));
+ 
+ #ifdef WEBRTC_AGC_DEBUG_DUMP
+-  stt->fpt = fopen("./agc_test_log.txt", "wt");
+-  stt->agcLog = fopen("./agc_debug_log.txt", "wt");
+-  stt->digitalAgc.logFile = fopen("./agc_log.txt", "wt");
++  stt->fpt = fopen("/sdcard/agc_test_log.txt", "wt");
++  stt->agcLog = fopen("/sdcard/agc_debug_log.txt", "wt");
++  stt->digitalAgc.logFile = fopen("/sdcard/agc_log.txt", "wt");
+ #endif
+ 
+   stt->initFlag = 0;
+@@ -1371,7 +1371,7 @@ int WebRtcAgc_Init(void *agcInst, int32_t minLevel, int32_t maxLevel,
+      */
+ #ifdef WEBRTC_AGC_DEBUG_DUMP
+     stt->fcount = 0;
+-    fprintf(stt->fpt, "AGC->Init\n");
++    fprintf(stt->agcLog, "AGC->Init\n");
+ #endif
+     if (agcMode < kAgcModeUnchanged || agcMode > kAgcModeFixedDigital)
+     {
+diff --git a/webrtc/modules/audio_processing/audio_processing.gypi b/webrtc/modules/audio_processing/audio_processing.gypi
+index a6e8f5c..1344a88 100644
+--- a/webrtc/modules/audio_processing/audio_processing.gypi
++++ b/webrtc/modules/audio_processing/audio_processing.gypi
+@@ -16,8 +16,8 @@
+       'type': 'static_library',
+       'variables': {
+         # Outputs some low-level debug files.
+-        'aec_debug_dump%': 0,
+-        'agc_debug_dump%': 0,
++        'aec_debug_dump%': 1,
++        'agc_debug_dump%': 1,
+ 
+         # Disables the usual mode where we trust the reported system delay
+         # values the AEC receives. The corresponding define is set appropriately
+diff --git a/webrtc/modules/audio_processing/gain_control_impl.cc b/webrtc/modules/audio_processing/gain_control_impl.cc
+index 8a3612d..6b425a3 100644
+--- a/webrtc/modules/audio_processing/gain_control_impl.cc
++++ b/webrtc/modules/audio_processing/gain_control_impl.cc
+@@ -15,6 +15,9 @@
+ #include "webrtc/modules/audio_processing/audio_buffer.h"
+ #include "webrtc/modules/audio_processing/agc/legacy/gain_control.h"
+ #include "webrtc/system_wrappers/interface/critical_section_wrapper.h"
++#include "webrtc/system_wrappers/interface/logging.h"
++#include "webrtc/system_wrappers/interface/trace.h"
++#include "webrtc/system_wrappers/interface/trace_event.h"
+ 
+ namespace webrtc {
+ 
+@@ -125,6 +128,8 @@ int GainControlImpl::AnalyzeCaptureAudio(AudioBuffer* audio) {
+ }
+ 
+ int GainControlImpl::ProcessCaptureAudio(AudioBuffer* audio) {
++//  LOG(LS_ERROR) << "luqiang, ProcessCaptureAudio";
++//  WEBRTC_TRACE(kTraceDebug, kTraceAudioProcessing, 9999, "1, luqiang, %s, num_frames_per_band = %d, audio->num_channels = %d", __FUNCTION__, audio->num_frames_per_band(), audio->num_channels());
+   if (!is_component_enabled()) {
+     return apm_->kNoError;
+   }
+@@ -136,6 +141,9 @@ int GainControlImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+   assert(audio->num_frames_per_band() <= 160);
+   assert(audio->num_channels() == num_handles());
+ 
++//  WEBRTC_TRACE(kTraceDebug, kTraceAudioProcessing, 9999, "2, luqiang, %s, num_frames_per_band = %d, audio->num_channels = %d", __FUNCTION__, audio->num_frames_per_band(), audio->num_channels());
++//  LOG_F(LS_INFO) << "luqiang, mode_ = " << mode_ << ", num_frames_per_band = " << audio->num_frames_per_band() << " ,num_handles = " << audio->num_channels();
++
+   stream_is_saturated_ = false;
+   for (int i = 0; i < num_handles(); i++) {
+     Handle* my_handle = static_cast<Handle*>(handle(i));
+@@ -157,6 +165,9 @@ int GainControlImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+       return GetHandleError(my_handle);
+     }
+ 
++//    LOG(LS_INFO) << "luqiang, capture_level_out = " << capture_level_out;
++//    WEBRTC_TRACE(kTraceError, kTraceAudioProcessing, 9999, "luqiang, %s, cpature_levels[%d] = %d, capture_level_out= %d", __FUNCTION__, i, capture_levels_[i], capture_level_out);
++
+     capture_levels_[i] = capture_level_out;
+     if (saturation_warning == 1) {
+       stream_is_saturated_ = true;
+@@ -180,6 +191,7 @@ int GainControlImpl::ProcessCaptureAudio(AudioBuffer* audio) {
+ // TODO(ajm): ensure this is called under kAdaptiveAnalog.
+ int GainControlImpl::set_stream_analog_level(int level) {
+   CriticalSectionScoped crit_scoped(crit_);
++  LOG_F(LS_INFO) << "luqiang, level = " << level;
+   was_analog_level_set_ = true;
+   if (level < minimum_capture_level_ || level > maximum_capture_level_) {
+     return apm_->kBadParameterError;
+@@ -254,6 +266,7 @@ bool GainControlImpl::stream_is_saturated() const {
+ 
+ int GainControlImpl::set_target_level_dbfs(int level) {
+   CriticalSectionScoped crit_scoped(crit_);
++  LOG_F(LS_INFO) << "luqiang, level = " << level;
+   if (level > 31 || level < 0) {
+     return apm_->kBadParameterError;
+   }
+@@ -268,6 +281,7 @@ int GainControlImpl::target_level_dbfs() const {
+ 
+ int GainControlImpl::set_compression_gain_db(int gain) {
+   CriticalSectionScoped crit_scoped(crit_);
++  LOG_F(LS_INFO) << "luqiang, gain = " << gain;
+   if (gain < 0 || gain > 90) {
+     return apm_->kBadParameterError;
+   }
+diff --git a/webrtc/system_wrappers/source/trace_impl.h b/webrtc/system_wrappers/source/trace_impl.h
+index da5af72..a621174 100644
+--- a/webrtc/system_wrappers/source/trace_impl.h
++++ b/webrtc/system_wrappers/source/trace_impl.h
+@@ -21,13 +21,13 @@
+ 
+ namespace webrtc {
+ 
+-#define WEBRTC_TRACE_MAX_MESSAGE_SIZE 1024
++#define WEBRTC_TRACE_MAX_MESSAGE_SIZE 2024
+ // Total buffer size is WEBRTC_TRACE_NUM_ARRAY (number of buffer partitions) *
+ // WEBRTC_TRACE_MAX_QUEUE (number of lines per buffer partition) *
+ // WEBRTC_TRACE_MAX_MESSAGE_SIZE (number of 1 byte charachters per line) =
+ // 1 or 4 Mbyte.
+ 
+-#define WEBRTC_TRACE_MAX_FILE_SIZE 100*1000
++#define WEBRTC_TRACE_MAX_FILE_SIZE 10000*1000
+ // Number of rows that may be written to file. On average 110 bytes per row (max
+ // 256 bytes per row). So on average 110*100*1000 = 11 Mbyte, max 256*100*1000 =
+ // 25.6 Mbyte
+diff --git a/webrtc/voice_engine/voe_base_impl.cc b/webrtc/voice_engine/voe_base_impl.cc
+index 94cd98f..f7d3dc3 100644
+--- a/webrtc/voice_engine/voe_base_impl.cc
++++ b/webrtc/voice_engine/voe_base_impl.cc
+@@ -19,6 +19,8 @@
+ #include "webrtc/system_wrappers/interface/critical_section_wrapper.h"
+ #include "webrtc/system_wrappers/interface/file_wrapper.h"
+ #include "webrtc/system_wrappers/interface/logging.h"
++#include "webrtc/system_wrappers/interface/event_wrapper.h"
++#include "webrtc/system_wrappers/interface/trace.h"
+ #include "webrtc/voice_engine/channel.h"
+ #include "webrtc/voice_engine/include/voe_errors.h"
+ #include "webrtc/voice_engine/output_mixer.h"
+@@ -367,6 +369,8 @@ int VoEBaseImpl::Init(AudioDeviceModule* external_adm,
+   if (shared_->audio_device()->SetAGC(agc_enabled) != 0) {
+     LOG_F(LS_ERROR) << "Failed to set agc to enabled: " << agc_enabled;
+     shared_->SetLastError(VE_AUDIO_DEVICE_MODULE_ERROR);
++    LOG_F(LS_ERROR) << " luqiang, Failed to set agc to enabled: " << agc_enabled;
++
+     // TODO(ajm): No error return here due to
+     // https://code.google.com/p/webrtc/issues/detail?id=1464
+   }
+diff --git a/webrtc/voice_engine/voice_engine_impl.cc b/webrtc/voice_engine/voice_engine_impl.cc
+index f7f363d..e1a9553 100644
+--- a/webrtc/voice_engine/voice_engine_impl.cc
++++ b/webrtc/voice_engine/voice_engine_impl.cc
+@@ -18,6 +18,7 @@
+ #include "webrtc/modules/audio_coding/main/interface/audio_coding_module.h"
+ #include "webrtc/system_wrappers/interface/trace.h"
+ #include "webrtc/voice_engine/voice_engine_impl.h"
++#include "webrtc/system_wrappers/interface/logging.h"
+ 
+ namespace webrtc {
+ 
+@@ -87,9 +88,10 @@ VoiceEngine* VoiceEngine::Create(const Config& config) {
+ }
+ 
+ int VoiceEngine::SetTraceFilter(unsigned int filter) {
+-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice,
++  WEBRTC_TRACE(kTraceError, kTraceVoice,
+                VoEId(gVoiceEngineInstanceCounter, -1),
+                "SetTraceFilter(filter=0x%x)", filter);
++  LOG_F(LS_ERROR) << "luqiang, voe SetTraceFilter, filter = " << filter;
+ 
+   // Remember old filter
+   uint32_t oldFilter = Trace::level_filter();
+@@ -106,7 +108,7 @@ int VoiceEngine::SetTraceFilter(unsigned int filter) {
+ 
+ int VoiceEngine::SetTraceFile(const char* fileNameUTF8, bool addFileCounter) {
+   int ret = Trace::SetTraceFile(fileNameUTF8, addFileCounter);
+-  WEBRTC_TRACE(kTraceApiCall, kTraceVoice,
++  WEBRTC_TRACE(kTraceError, kTraceVoice,
+                VoEId(gVoiceEngineInstanceCounter, -1),
+                "SetTraceFile(fileNameUTF8=%s, addFileCounter=%d)", fileNameUTF8,
+                addFileCounter);
+-- 
+1.9.1
+
